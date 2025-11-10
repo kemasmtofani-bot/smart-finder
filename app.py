@@ -35,13 +35,25 @@ def extract_text_from_docx(path):
     text = "\n".join([p.text for p in doc.paragraphs])
     return {1: text}
 
+# coba import PyMuPDF
+try:
+    import fitz  # PyMuPDF
+    HAS_PYMUPDF = True
+except Exception:
+    HAS_PYMUPDF = False
+    from pdfminer.high_level import extract_text as pdfminer_extract_text
 
+# fungsi ekstrak pdf
 def extract_text_from_pdf(path):
-    doc = fitz.open(path)
     pages = {}
-    for i, page in enumerate(doc):
-        text = page.get_text("text")
-        pages[i + 1] = text
+    if HAS_PYMUPDF:
+        doc = fitz.open(path)
+        for i, page in enumerate(doc):
+            pages[i + 1] = page.get_text("text")
+    else:
+        # pdfminer menghasilkan 1 string, simpan sebagai 1 halaman agar tidak crash
+        text = pdfminer_extract_text(path) or ""
+        pages[1] = text
     return pages
 
 
