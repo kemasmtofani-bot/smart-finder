@@ -6,3 +6,8 @@ pdfminer-six
 requests
 sentence-transformers
 faiss-cpu
+pymupdf
+pytesseract
+pdf2image
+pillow
+python-dotenv
