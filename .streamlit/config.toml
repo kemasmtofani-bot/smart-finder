@@ -1,0 +1,14 @@
+[server]
+headless = true
+enableCORS = true
+enableXsrfProtection = true
+port = 8501
+maxUploadSize = 200
+
+[theme]
+base = "light"
+primaryColor = "#2E7D32"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f4f4f4"
+textColor = "#000000"
+font = "sans serif"

@@ -1,0 +1,16 @@
+# Mengabaikan file .env yang berisi API key dan informasi sensitif
+.env
+
+# Folder virtual environment
+.venv/
+venv/
+
+# Folder dan file sementara lainnya
+__pycache__/
+*.pyc
+*.pyo
+*.tmp
+
+# File lain yang mungkin dihasilkan saat menggunakan alat tertentu
+*.log
+*.bak

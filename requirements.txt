@@ -1,0 +1,8 @@
+streamlit
+whoosh
+python-docx
+python-doc
+pdfminer-six
+requests
+sentence-transformers
+faiss-cpu
