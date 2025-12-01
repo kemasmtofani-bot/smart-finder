@@ -20,7 +20,6 @@ import openai
 # Muat .env (untuk lokal)
 load_dotenv()
 
-
 def get_secret(name: str, default: str = "") -> str:
     """
     Ambil secret dengan prioritas:
@@ -31,7 +30,6 @@ def get_secret(name: str, default: str = "") -> str:
         return st.secrets[name]
     except Exception:
         return os.getenv(name, default)
-
 
 OPENAI_API_KEY = get_secret("OPENAI_API_KEY")
 SERPAPI_API_KEY = get_secret("SERPAPI_API_KEY")
@@ -200,10 +198,6 @@ def search_internet_standard(keyword: str):
 # =========================
 
 def query_openai(question: str, context: str):
-    """
-    Mengirim pertanyaan ke OpenAI (gpt-3.5-turbo)
-    Menggunakan API lama (openai==0.28) dengan ChatCompletion
-    """
     if not OPENAI_API_KEY:
         return "OPENAI_API_KEY belum diatur. Isi dulu di Secrets atau .env."
 
@@ -240,11 +234,20 @@ Jawaban (gunakan hanya informasi dari konteks di atas, jika tidak ada di konteks
             max_tokens=300,
             temperature=0.3,
         )
-
         return response["choices"][0]["message"]["content"].strip()
+
+    except openai_error.RateLimitError:
+        # Ini biasanya mencakup pesan "You exceeded your current quota"
+        st.warning(
+            "Kuota pemakaian OpenAI untuk API key ini sudah habis. "
+            "Silakan cek kembali plan dan billing di akun OpenAI."
+        )
+        return "Saat ini kuota OpenAI sudah habis, jadi fitur tanya jawab sementara tidak dapat digunakan."
+
     except Exception as e:
         st.error(f"Terjadi kesalahan saat memanggil API OpenAI: {e}")
         return "Terjadi kesalahan dalam pemrosesan pertanyaan."
+
 
 
 # =========================
