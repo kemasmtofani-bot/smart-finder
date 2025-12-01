@@ -13,8 +13,6 @@ from dotenv import load_dotenv
 # Jika pakai openai==0.28 (interface lama)
 import openai
 
-from openai import OpenAI
-from openai import APIError, RateLimitError, APIConnectionError
 
 
 # =========================
