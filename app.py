@@ -12,7 +12,10 @@ from dotenv import load_dotenv
 
 # Jika pakai openai==0.28 (interface lama)
 import openai
-import openai.error as openai_error
+
+from openai import OpenAI
+from openai import APIError, RateLimitError, APIConnectionError
+
 
 # =========================
 # 1. Konfigurasi API Key
@@ -198,56 +201,42 @@ def search_internet_standard(keyword: str):
 # 7. Tanya Jawab dengan OpenAI (berbasis dokumen)
 # =========================
 
-def query_openai(question: str, context: str):
-    if not OPENAI_API_KEY:
-        return "OPENAI_API_KEY belum diatur. Isi dulu di Secrets atau .env."
+def query_openai(question, context):
+    """Mengirimkan pertanyaan ke OpenAI untuk dijawab berdasarkan konteks dokumen."""
+
+    if not openai.api_key:
+        return "OPENAI_API_KEY belum diatur. Isi dulu di Secrets Streamlit atau .env."
 
     prompt = f"""
-Berikut adalah beberapa contoh tanya jawab yang berkaitan dengan dokumen:
+    Berikut adalah konteks dokumen:
 
-Contoh 1:
-Pertanyaan: Apa itu SCADA?
-Jawaban: SCADA (Supervisory Control and Data Acquisition) adalah sistem yang digunakan untuk mengawasi dan mengontrol proses industri secara jarak jauh.
+    {context}
 
-Contoh 2:
-Pertanyaan: Apa fungsi dari gateway SCADA?
-Jawaban: Gateway SCADA bertanggung jawab untuk menghubungkan sistem SCADA dengan perangkat lain dan memastikan komunikasi yang lancar antara perangkat dan server.
+    Berdasarkan konteks di atas, jawab pertanyaan berikut secara akurat dan ringkas.
 
-Konteks:
-{context}
-
-Pertanyaan:
-{question}
-
-Jawaban (gunakan hanya informasi dari konteks di atas, jika tidak ada di konteks katakan tidak ditemukan):
-"""
+    Pertanyaan: {question}
+    Jawaban:
+    """
 
     try:
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
-                {
-                    "role": "system",
-                    "content": "Anda adalah asisten yang menjawab berdasarkan isi dokumen teknis yang diberikan."
-                },
-                {"role": "user", "content": prompt},
+                {"role": "system", "content": "Anda adalah asisten teknis yang hanya menjawab berdasarkan dokumen."},
+                {"role": "user", "content": prompt}
             ],
-            max_tokens=300,
-            temperature=0.3,
+            max_tokens=250,
+            temperature=0.3
         )
+
         return response["choices"][0]["message"]["content"].strip()
 
-    except openai_error.RateLimitError:
-        # Di sini biasanya pesan “You exceeded your current quota”
-        st.warning(
-            "Kuota pemakaian OpenAI untuk API key ini sudah habis "
-            "atau dibatasi. Silakan cek kembali plan dan billing di akun OpenAI."
-        )
-        return "Saat ini kuota OpenAI sedang dibatasi/habis, jadi fitur tanya jawab sementara tidak dapat digunakan."
-
+    # SDK OpenAI baru tidak punya openai.error lagi
     except Exception as e:
-        st.error(f"Terjadi kesalahan saat memanggil API OpenAI: {e}")
-        return "Terjadi kesalahan dalam pemrosesan pertanyaan."
+        # deteksi "You exceeded your current quota"
+        if "quota" in str(e).lower():
+            return "Kuota OpenAI Anda sudah habis atau belum diaktifkan. Silakan cek billing di platform.openai.com."
+        return f"Terjadi kesalahan saat memanggil API OpenAI: {e}"
 
 
 # =========================
