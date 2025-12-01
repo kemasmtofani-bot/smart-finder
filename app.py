@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 # Jika pakai openai==0.28 (interface lama)
 import openai
+import openai.error as openai_error
 
 # =========================
 # 1. Konfigurasi API Key
@@ -237,17 +238,16 @@ Jawaban (gunakan hanya informasi dari konteks di atas, jika tidak ada di konteks
         return response["choices"][0]["message"]["content"].strip()
 
     except openai_error.RateLimitError:
-        # Ini biasanya mencakup pesan "You exceeded your current quota"
+        # Di sini biasanya pesan “You exceeded your current quota”
         st.warning(
-            "Kuota pemakaian OpenAI untuk API key ini sudah habis. "
-            "Silakan cek kembali plan dan billing di akun OpenAI."
+            "Kuota pemakaian OpenAI untuk API key ini sudah habis "
+            "atau dibatasi. Silakan cek kembali plan dan billing di akun OpenAI."
         )
-        return "Saat ini kuota OpenAI sudah habis, jadi fitur tanya jawab sementara tidak dapat digunakan."
+        return "Saat ini kuota OpenAI sedang dibatasi/habis, jadi fitur tanya jawab sementara tidak dapat digunakan."
 
     except Exception as e:
         st.error(f"Terjadi kesalahan saat memanggil API OpenAI: {e}")
         return "Terjadi kesalahan dalam pemrosesan pertanyaan."
-
 
 
 # =========================
