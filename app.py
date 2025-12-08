@@ -1,6 +1,7 @@
 import os
 import platform
 import tempfile
+import json
 
 import docx
 import pytesseract
@@ -10,55 +11,43 @@ import requests
 import streamlit as st
 from dotenv import load_dotenv
 
-# Jika pakai openai==0.28 (interface lama)
-import openai
-
-
-
 # =========================
-# 1. Konfigurasi API Key
+# 1. Konfigurasi secrets
 # =========================
 
-# Muat .env (untuk lokal)
-load_dotenv()
+load_dotenv()  # untuk lokal (.env)
+
 
 def get_secret(name: str, default: str = "") -> str:
-    """
-    Ambil secret dengan prioritas:
-    1. st.secrets (Streamlit Cloud)
-    2. environment variable (.env atau OS)
-    """
+    """Ambil secret dari st.secrets (Cloud) lalu fallback ke environment/.env."""
     try:
         return st.secrets[name]
     except Exception:
         return os.getenv(name, default)
 
-OPENAI_API_KEY = get_secret("OPENAI_API_KEY")
-SERPAPI_API_KEY = get_secret("SERPAPI_API_KEY")
 
-# Set API key untuk openai (versi lama)
-openai.api_key = OPENAI_API_KEY
+DEEPSEEK_API_KEY = get_secret("DEEPSEEK_API_KEY")
+SERPAPI_API_KEY = get_secret("SERPAPI_API_KEY")
 
 # =========================
 # 2. Konfigurasi OCR
 # =========================
 
-# Tesseract
 if platform.system().lower() == "windows":
-    # Sesuaikan jika instalasi Tesseract di lokasi lain
     pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-    POPPLER_PATH = r"C:\Poppler\Library\bin"  # untuk pdf2image di Windows
+    POPPLER_PATH = r"C:\Poppler\Library\bin"
 else:
-    # Di Linux / Streamlit Cloud, gunakan tesseract dari sistem (via apt.txt)
     pytesseract.pytesseract.tesseract_cmd = "tesseract"
-    POPPLER_PATH = None  # pdf2image akan mencari poppler di PATH (poppler-utils dari apt.txt)
+    POPPLER_PATH = None  # di Streamlit Cloud pakai poppler-utils dari apt.txt
+
 
 # =========================
-# 3. Import PDF Backend
+# 3. Backend PDF
 # =========================
 
 try:
     import fitz  # PyMuPDF
+
     HAS_PYMUPDF = True
 except Exception:
     HAS_PYMUPDF = False
@@ -66,7 +55,7 @@ except Exception:
 
 
 # =========================
-# 4. Fungsi Pembaca File
+# 4. Fungsi pembaca file
 # =========================
 
 def extract_text_from_docx(path: str):
@@ -83,29 +72,24 @@ def extract_text_from_pdf(path: str):
             text = page.get_text("text") or ""
             pages[i + 1] = text
     else:
-        # Fallback: pdfminer menghasilkan satu string panjang
         text = pdfminer_extract_text(path) or ""
         pages[1] = text
     return pages
 
 
 def extract_text_from_scanned_pdf(path: str):
-    # Konversi PDF -> image per halaman
     if POPPLER_PATH:
         images = convert_from_path(path, 300, poppler_path=POPPLER_PATH)
     else:
         images = convert_from_path(path, 300)
 
     result = {}
-    # TemporaryDirectory supaya aman di semua OS
     with tempfile.TemporaryDirectory() as temp_dir:
         for i, page in enumerate(images, start=1):
             temp_image_path = os.path.join(temp_dir, f"page_{i}.jpg")
             page.save(temp_image_path, "JPEG")
-
             text = pytesseract.image_to_string(Image.open(temp_image_path), lang="ind+eng")
             result[i] = text or ""
-
     return result
 
 
@@ -115,7 +99,6 @@ def extract_text_auto(path: str):
         return extract_text_from_docx(path)
     elif lower.endswith(".pdf"):
         pages = extract_text_from_pdf(path)
-        # Jika semua halaman kosong, coba OCR
         if not any(pages.values()):
             st.warning(f"Tidak ada teks terbaca di PDF, menggunakan OCR untuk {os.path.basename(path)}.")
             return extract_text_from_scanned_pdf(path)
@@ -126,7 +109,7 @@ def extract_text_auto(path: str):
 
 
 # =========================
-# 5. Fungsi Pencarian Lokal
+# 5. Pencarian lokal
 # =========================
 
 def search_keyword_in_pages(keyword: str, pages: dict):
@@ -148,15 +131,10 @@ def search_keyword_in_pages(keyword: str, pages: dict):
 
 
 # =========================
-# 6. Pencarian Internet (Standarisasi)
+# 6. Pencarian internet (standarisasi)
 # =========================
 
 def search_internet_standard(keyword: str):
-    """
-    Pencarian standar terkait keyword:
-    - Situs: IEEE, IEC, SNI, NEMA
-    - Query umum: 'standardisasi terkait <keyword>'
-    """
     if not SERPAPI_API_KEY:
         st.info("SERPAPI_API_KEY belum diatur. Kolom pencarian internet akan kosong.")
         return []
@@ -177,6 +155,7 @@ def search_internet_standard(keyword: str):
         for url in urls:
             resp = requests.get(url, timeout=20)
             data = resp.json()
+
             for item in data.get("organic_results", []):
                 title = item.get("title", "No title")
                 link = item.get("link", "No link")
@@ -186,7 +165,6 @@ def search_internet_standard(keyword: str):
         st.error(f"Terjadi kesalahan saat mencari di internet: {e}")
         return []
 
-    # Hilangkan duplikat berdasarkan link
     unique = {}
     for title, snippet, link in results:
         if link and link not in unique:
@@ -196,45 +174,65 @@ def search_internet_standard(keyword: str):
 
 
 # =========================
-# 7. Tanya Jawab dengan OpenAI (berbasis dokumen)
+# 7. Tanya jawab dengan DeepSeek
 # =========================
 
-def query_openai(question, context):
-    """Mengirimkan pertanyaan ke OpenAI untuk dijawab berdasarkan konteks dokumen."""
+DEEPSEEK_ENDPOINT = "https://api.deepseek.com/chat/completions"
 
-    if not openai.api_key:
-        return "OPENAI_API_KEY belum diatur. Isi dulu di Secrets Streamlit atau .env."
 
-    prompt = f"""
-    Berikut adalah konteks dokumen:
-
-    {context}
-
-    Berdasarkan konteks di atas, jawab pertanyaan berikut secara akurat dan ringkas.
-
-    Pertanyaan: {question}
-    Jawaban:
+def query_openai(question: str, context: str):
+    """
+    Sekarang fungsi ini menggunakan DeepSeek-Chat
+    tapi nama dipertahankan (supaya pemanggilan lama tidak perlu diubah).
     """
 
+    if not DEEPSEEK_API_KEY:
+        return "DEEPSEEK_API_KEY belum diatur. Isi dulu di Secrets Streamlit atau file .env."
+
+    # Prompt tetap bergaya seperti sebelumnya
+    prompt = f"""
+Berikut adalah konteks dokumen teknis:
+
+{context}
+
+Jawab pertanyaan berikut hanya berdasarkan konteks di atas.
+Jika jawabannya tidak ditemukan di konteks, jawab dengan jujur bahwa informasi tidak tersedia.
+
+Pertanyaan: {question}
+Jawaban:
+"""
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+    }
+
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {
+                "role": "system",
+                "content": "Anda adalah asisten teknis yang menjawab berdasarkan isi dokumen teknis PLN."
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": 300,
+        "temperature": 0.3,
+    }
+
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Anda adalah asisten teknis yang hanya menjawab berdasarkan dokumen."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=250,
-            temperature=0.3
-        )
+        resp = requests.post(DEEPSEEK_ENDPOINT, headers=headers, data=json.dumps(payload), timeout=60)
+        data = resp.json()
 
-        return response["choices"][0]["message"]["content"].strip()
+        if "error" in data:
+            # Error dari DeepSeek (misal quota, key salah, dll.)
+            msg = data["error"].get("message", "Error dari DeepSeek.")
+            return f"Terjadi kesalahan saat memanggil DeepSeek: {msg}"
 
-    # SDK OpenAI baru tidak punya openai.error lagi
+        return data["choices"][0]["message"]["content"].strip()
+
     except Exception as e:
-        # deteksi "You exceeded your current quota"
-        if "quota" in str(e).lower():
-            return "Kuota OpenAI Anda sudah habis atau belum diaktifkan. Silakan cek billing di platform.openai.com."
-        return f"Terjadi kesalahan saat memanggil API OpenAI: {e}"
+        return f"Terjadi kesalahan koneksi ke DeepSeek: {e}"
 
 
 # =========================
@@ -256,8 +254,7 @@ query = st.text_input("Masukkan keyword atau pertanyaan:")
 
 col_local, col_web = st.columns(2)
 
-# Context untuk Tanya Jawab (dibangun dari hasil pencarian)
-context = ""
+context = ""  # untuk tanya jawab
 
 if uploaded_files and query:
     with st.spinner("Memproses dokumen..."):
@@ -273,7 +270,6 @@ if uploaded_files and query:
             pages = extract_text_auto(temp_path)
             found = search_keyword_in_pages(query, pages)
 
-            # Bangun konteks untuk tab Tanya Jawab
             for page_num, snippet in found:
                 context += f"Dokumen: {uploaded_file.name}, Halaman {page_num}: {snippet}\n"
 
@@ -307,6 +303,6 @@ if tab == "Tanya Jawab":
     elif not query:
         st.info("Masukkan pertanyaan di kotak input di atas.")
     else:
-        with st.spinner("Menghasilkan jawaban..."):
+        with st.spinner("Menghasilkan jawaban dari DeepSeek..."):
             answer = query_openai(query, context)
             st.markdown(f"Jawaban:\n\n{answer}")
