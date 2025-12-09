@@ -26,7 +26,7 @@ def get_secret(name: str, default: str = "") -> str:
         return os.getenv(name, default)
 
 
-DEEPSEEK_API_KEY = get_secret("DEEPSEEK_API_KEY")
+GROQ_API_KEY = get_secret("GROQ_API_KEY")
 SERPAPI_API_KEY = get_secret("SERPAPI_API_KEY")
 
 # =========================
@@ -109,7 +109,7 @@ def extract_text_auto(path: str):
 
 
 # =========================
-# 5. Pencarian lokal
+# 5. Pencarian lokal dalam dokumen
 # =========================
 
 def search_keyword_in_pages(keyword: str, pages: dict):
@@ -174,24 +174,24 @@ def search_internet_standard(keyword: str):
 
 
 # =========================
-# 7. Tanya jawab dengan DeepSeek
+# 7. Tanya jawab dengan GROQ (DeepSeek model)
 # =========================
 
-DEEPSEEK_ENDPOINT = "https://api.deepseek.com/chat/completions"
+GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODEL = "deepseek-r1-distill-qwen-32b"  # model gratis di Groq
 
 
 def query_openai(question: str, context: str):
     """
-    Sekarang fungsi ini menggunakan DeepSeek-Chat
-    tapi nama dipertahankan (supaya pemanggilan lama tidak perlu diubah).
+    Sekarang fungsi ini menggunakan Groq API dengan model DeepSeek-R1 Distill.
+    Nama fungsi dipertahankan supaya pemanggil tidak perlu diubah.
     """
 
-    if not DEEPSEEK_API_KEY:
-        return "DEEPSEEK_API_KEY belum diatur. Isi dulu di Secrets Streamlit atau file .env."
+    if not GROQ_API_KEY:
+        return "GROQ_API_KEY belum diatur. Isi dulu di Secrets Streamlit atau file .env."
 
-    # Prompt tetap bergaya seperti sebelumnya
     prompt = f"""
-Berikut adalah konteks dokumen teknis:
+Berikut adalah konteks dokumen teknis PLN:
 
 {context}
 
@@ -204,11 +204,11 @@ Jawaban:
 
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Authorization": f"Bearer {GROQ_API_KEY}",
     }
 
     payload = {
-        "model": "deepseek-chat",
+        "model": GROQ_MODEL,
         "messages": [
             {
                 "role": "system",
@@ -216,23 +216,22 @@ Jawaban:
             },
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": 300,
+        "max_tokens": 400,
         "temperature": 0.3,
     }
 
     try:
-        resp = requests.post(DEEPSEEK_ENDPOINT, headers=headers, data=json.dumps(payload), timeout=60)
+        resp = requests.post(GROQ_ENDPOINT, headers=headers, data=json.dumps(payload), timeout=60)
         data = resp.json()
 
         if "error" in data:
-            # Error dari DeepSeek (misal quota, key salah, dll.)
-            msg = data["error"].get("message", "Error dari DeepSeek.")
-            return f"Terjadi kesalahan saat memanggil DeepSeek: {msg}"
+            msg = data["error"].get("message", "Error dari Groq.")
+            return f"Terjadi kesalahan saat memanggil Groq: {msg}"
 
         return data["choices"][0]["message"]["content"].strip()
 
     except Exception as e:
-        return f"Terjadi kesalahan koneksi ke DeepSeek: {e}"
+        return f"Terjadi kesalahan koneksi ke Groq: {e}"
 
 
 # =========================
@@ -303,6 +302,6 @@ if tab == "Tanya Jawab":
     elif not query:
         st.info("Masukkan pertanyaan di kotak input di atas.")
     else:
-        with st.spinner("Menghasilkan jawaban dari DeepSeek..."):
+        with st.spinner("Menghasilkan jawaban dari Groq (DeepSeek model)..."):
             answer = query_openai(query, context)
             st.markdown(f"Jawaban:\n\n{answer}")
