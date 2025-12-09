@@ -15,11 +15,15 @@ from dotenv import load_dotenv
 # 1. Konfigurasi secrets
 # =========================
 
-load_dotenv()  # untuk lokal (.env)
+# Memuat .env saat running lokal
+load_dotenv()
 
 
 def get_secret(name: str, default: str = "") -> str:
-    """Ambil secret dari st.secrets (Cloud) lalu fallback ke environment/.env."""
+    """
+    Ambil secret dari Streamlit Cloud (st.secrets),
+    kalau tidak ada pakai environment variable / .env.
+    """
     try:
         return st.secrets[name]
     except Exception:
@@ -34,15 +38,17 @@ SERPAPI_API_KEY = get_secret("SERPAPI_API_KEY")
 # =========================
 
 if platform.system().lower() == "windows":
+    # SESUAIKAN path Tesseract dan Poppler di Windows
     pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
     POPPLER_PATH = r"C:\Poppler\Library\bin"
 else:
+    # Di Linux / Streamlit Cloud biasanya paket tesseract sudah ada di PATH
     pytesseract.pytesseract.tesseract_cmd = "tesseract"
-    POPPLER_PATH = None  # di Streamlit Cloud pakai poppler-utils dari apt.txt
+    POPPLER_PATH = None  # convert_from_path akan pakai poppler dari sistem
 
 
 # =========================
-# 3. Backend PDF
+# 3. Backend PDF (PyMuPDF / pdfminer)
 # =========================
 
 try:
@@ -55,16 +61,18 @@ except Exception:
 
 
 # =========================
-# 4. Fungsi pembaca file
+# 4. Fungsi pembaca file (DOCX / PDF / scanned PDF)
 # =========================
 
-def extract_text_from_docx(path: str):
+def extract_text_from_docx(path: str) -> dict:
+    """Ekstrak teks dari DOCX, dikembalikan sebagai dict {1: full_text}."""
     doc = docx.Document(path)
     text = "\n".join(p.text for p in doc.paragraphs)
     return {1: text}
 
 
-def extract_text_from_pdf(path: str):
+def extract_text_from_pdf(path: str) -> dict:
+    """Ekstrak teks dari PDF normal (bukan hasil scan)."""
     pages = {}
     if HAS_PYMUPDF:
         doc = fitz.open(path)
@@ -77,7 +85,8 @@ def extract_text_from_pdf(path: str):
     return pages
 
 
-def extract_text_from_scanned_pdf(path: str):
+def extract_text_from_scanned_pdf(path: str) -> dict:
+    """Ekstrak teks dari PDF hasil scan dengan OCR (pytesseract)."""
     if POPPLER_PATH:
         images = convert_from_path(path, 300, poppler_path=POPPLER_PATH)
     else:
@@ -93,12 +102,14 @@ def extract_text_from_scanned_pdf(path: str):
     return result
 
 
-def extract_text_auto(path: str):
+def extract_text_auto(path: str) -> dict:
+    """Deteksi tipe file dan ekstrak teks per halaman."""
     lower = path.lower()
     if lower.endswith(".docx"):
         return extract_text_from_docx(path)
     elif lower.endswith(".pdf"):
         pages = extract_text_from_pdf(path)
+        # jika kosong (scan-only) → pakai OCR
         if not any(pages.values()):
             st.warning(f"Tidak ada teks terbaca di PDF, menggunakan OCR untuk {os.path.basename(path)}.")
             return extract_text_from_scanned_pdf(path)
@@ -113,6 +124,7 @@ def extract_text_auto(path: str):
 # =========================
 
 def search_keyword_in_pages(keyword: str, pages: dict):
+    """Cari keyword di setiap halaman, kembalikan list (page_num, snippet)."""
     results = []
     k = keyword.lower().strip()
     if not k:
@@ -135,6 +147,10 @@ def search_keyword_in_pages(keyword: str, pages: dict):
 # =========================
 
 def search_internet_standard(keyword: str):
+    """
+    Pencarian standar teknis terkait keyword menggunakan SerpAPI + Google.
+    Fokus ke IEC, IEEE, SNI, NEMA + query 'standardisasi terkait <keyword>'.
+    """
     if not SERPAPI_API_KEY:
         st.info("SERPAPI_API_KEY belum diatur. Kolom pencarian internet akan kosong.")
         return []
@@ -165,6 +181,7 @@ def search_internet_standard(keyword: str):
         st.error(f"Terjadi kesalahan saat mencari di internet: {e}")
         return []
 
+    # Hilangkan duplikat berdasarkan link
     unique = {}
     for title, snippet, link in results:
         if link and link not in unique:
@@ -174,21 +191,20 @@ def search_internet_standard(keyword: str):
 
 
 # =========================
-# 7. Tanya jawab dengan GROQ (DeepSeek model)
+# 7. Tanya jawab dengan Groq (Llama3 + fallback)
 # =========================
 
 GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "deepseek-r1-distill-qwen-32b"  # model gratis di Groq
+
+# Model utama & cadangan yang AKTIF di Groq (per Oktober 2025)
+GROQ_PRIMARY_MODEL = "llama-3.3-70b-versatile"
+GROQ_FALLBACK_MODEL = "llama-3.1-8b-instant"
 
 
-def query_openai(question: str, context: str):
-    """
-    Sekarang fungsi ini menggunakan Groq API dengan model DeepSeek-R1 Distill.
-    Nama fungsi dipertahankan supaya pemanggil tidak perlu diubah.
-    """
-
+def call_groq(model_name: str, question: str, context: str) -> str:
+    """Memanggil Groq dengan model tertentu dan mengembalikan jawaban teks."""
     if not GROQ_API_KEY:
-        return "GROQ_API_KEY belum diatur. Isi dulu di Secrets Streamlit atau file .env."
+        raise RuntimeError("GROQ_API_KEY belum diatur. Isi dulu di Secrets atau .env.")
 
     prompt = f"""
 Berikut adalah konteks dokumen teknis PLN:
@@ -199,7 +215,7 @@ Jawab pertanyaan berikut hanya berdasarkan konteks di atas.
 Jika jawabannya tidak ditemukan di konteks, jawab dengan jujur bahwa informasi tidak tersedia.
 
 Pertanyaan: {question}
-Jawaban:
+Jawaban dalam bahasa Indonesia yang jelas dan singkat:
 """
 
     headers = {
@@ -208,11 +224,11 @@ Jawaban:
     }
 
     payload = {
-        "model": GROQ_MODEL,
+        "model": model_name,
         "messages": [
             {
                 "role": "system",
-                "content": "Anda adalah asisten teknis yang menjawab berdasarkan isi dokumen teknis PLN."
+                "content": "Anda adalah asisten teknis sistem tenaga listrik yang menjawab berdasarkan dokumen."
             },
             {"role": "user", "content": prompt},
         ],
@@ -220,18 +236,31 @@ Jawaban:
         "temperature": 0.3,
     }
 
+    resp = requests.post(GROQ_ENDPOINT, headers=headers, data=json.dumps(payload), timeout=60)
+    data = resp.json()
+
+    if "error" in data:
+        # Naikkan sebagai exception supaya bisa di-handle fallback
+        raise RuntimeError(data["error"].get("message", "Error tidak dikenal dari Groq."))
+
+    return data["choices"][0]["message"]["content"].strip()
+
+
+def query_openai(question: str, context: str) -> str:
+    """
+    Fungsi wrapper untuk tanya jawab.
+    Nama 'query_openai' dipertahankan untuk kompatibilitas, tapi backend-nya Groq.
+    Pakai model utama, kalau gagal → fallback.
+    """
     try:
-        resp = requests.post(GROQ_ENDPOINT, headers=headers, data=json.dumps(payload), timeout=60)
-        data = resp.json()
-
-        if "error" in data:
-            msg = data["error"].get("message", "Error dari Groq.")
-            return f"Terjadi kesalahan saat memanggil Groq: {msg}"
-
-        return data["choices"][0]["message"]["content"].strip()
-
+        return call_groq(GROQ_PRIMARY_MODEL, question, context)
     except Exception as e:
-        return f"Terjadi kesalahan koneksi ke Groq: {e}"
+        # Tampilkan peringatan tapi tetap coba model cadangan
+        st.warning(f"Model utama error: {e}. Mencoba model cadangan...")
+        try:
+            return call_groq(GROQ_FALLBACK_MODEL, question, context)
+        except Exception as e2:
+            return f"Model fallback juga gagal: {e2}"
 
 
 # =========================
@@ -239,26 +268,35 @@ Jawaban:
 # =========================
 
 st.set_page_config(page_title="Smart Finder", layout="wide")
-st.title("Smart Finder")
+st.title("📂 Smart Finder")
 
+# Pilihan mode
 tab = st.radio("Pilih mode", ("Pencarian Dokumen", "Tanya Jawab"))
 
+# Upload dokumen
 uploaded_files = st.file_uploader(
     "Unggah satu atau beberapa dokumen (PDF/DOCX):",
     type=["pdf", "docx"],
     accept_multiple_files=True,
 )
 
+# Satu input untuk keyword / pertanyaan
 query = st.text_input("Masukkan keyword atau pertanyaan:")
 
+# Kolom untuk tab Pencarian
 col_local, col_web = st.columns(2)
 
-context = ""  # untuk tanya jawab
+# Konteks global untuk tanya jawab
+context = ""
+
+# =========================
+# 9. Proses dokumen & pencarian
+# =========================
 
 if uploaded_files and query:
     with st.spinner("Memproses dokumen..."):
         results = []
-        context = ""
+        context_parts = []
 
         for uploaded_file in uploaded_files:
             suffix = os.path.splitext(uploaded_file.name)[1]
@@ -269,39 +307,71 @@ if uploaded_files and query:
             pages = extract_text_auto(temp_path)
             found = search_keyword_in_pages(query, pages)
 
+            # kumpulkan konteks untuk tanya jawab
             for page_num, snippet in found:
-                context += f"Dokumen: {uploaded_file.name}, Halaman {page_num}: {snippet}\n"
+                context_parts.append(
+                    f"Dokumen: {uploaded_file.name}, Halaman {page_num}: {snippet}"
+                )
 
             if found:
                 results.append((uploaded_file.name, found))
 
+        context = "\n".join(context_parts)
+
+        # =========================
+        # Mode Pencarian Dokumen
+        # =========================
         if tab == "Pencarian Dokumen":
+            # Hasil di dokumen (kolom kiri)
             with col_local:
-                st.subheader("Hasil Pencarian di Dokumen")
+                st.subheader("🔍 Hasil Pencarian di Dokumen")
                 if results:
                     for file_name, found in results:
-                        st.markdown(f"### {file_name}")
+                        st.markdown(f"### 📘 {file_name}")
                         for page_num, snippet in found:
                             st.markdown(f"- Halaman {page_num}: ...{snippet}...")
                 else:
                     st.warning("Tidak ada hasil di dokumen untuk keyword tersebut.")
 
+            # Hasil standar di internet (kolom kanan)
             with col_web:
-                st.subheader("Hasil Pencarian Standarisasi Terkait (Internet)")
+                st.subheader("🌐 Hasil Pencarian Standarisasi Terkait (Internet)")
                 internet_results = search_internet_standard(query)
                 if internet_results:
                     for title, snippet, link in internet_results[:10]:
-                        st.markdown(f"{title}\n\n{snippet}\n\n[Link]({link})")
+                        st.markdown(f"**{title}**")
+                        st.write(snippet)
+                        st.markdown(f"[Link]({link})")
+                        st.markdown("---")
                 else:
                     st.warning("Tidak ada hasil pencarian untuk standarisasi terkait.")
 
+# =========================
+# 10. Mode Tanya Jawab
+# =========================
+
 if tab == "Tanya Jawab":
-    st.subheader("Tanya Jawab berbasis dokumen yang diunggah")
+    st.subheader("💬 Tanya Jawab berbasis dokumen yang diunggah")
+
     if not uploaded_files:
         st.info("Unggah dokumen terlebih dahulu.")
     elif not query:
         st.info("Masukkan pertanyaan di kotak input di atas.")
     else:
-        with st.spinner("Menghasilkan jawaban dari Groq (DeepSeek model)..."):
+        if not context:
+            st.warning("Belum ada konteks yang cocok dengan pertanyaan Anda di dokumen.")
+        with st.spinner("Menghasilkan jawaban dari Groq..."):
             answer = query_openai(query, context)
-            st.markdown(f"Jawaban:\n\n{answer}")
+            st.markdown("**Jawaban:**")
+            st.write(answer)
+
+# =========================
+# 11. Footer Kredit
+# =========================
+
+st.markdown("""
+<hr style="margin-top: 50px; margin-bottom: 10px;">
+<div style="text-align: center; color: gray; font-size: 14px;">
+    created by: <b>kemasmtofani</b> @ PLN Puslitbang
+</div>
+""", unsafe_allow_html=True)
